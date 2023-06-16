@@ -1,4 +1,5 @@
 - name: Generate timestamp
+  tags: [always]
   hosts: localhost
   connection: local
   tasks:
@@ -84,10 +85,11 @@
   connection: local
   tasks:
   - name: Summarize results
-    shell: |
-      summarize.py ./result/{{ timestamp }}
-    args:
-      executable: /usr/bin/python3
+    command:
+      argv:
+      - /usr/bin/python3
+      - ./summarize.py
+      - ./result/{{ timestamp }}
     register: summarize_result
   - debug:
       msg: "{{ summarize_result.stdout_lines }}"
