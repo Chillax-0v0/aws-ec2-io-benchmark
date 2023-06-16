@@ -1,0 +1,93 @@
+- name: Generate timestamp
+  hosts: localhost
+  connection: local
+  tasks:
+  - set_fact:
+      timestamp: "{{ ansible_date_time.iso8601_basic_short}}"
+
+- name: Set common facts
+  tags: [always]
+  hosts: all
+  connection: ssh
+  tasks:
+  - set_fact:
+      work_dir: "/home/ubuntu"
+  - set_fact:
+      instance_type: "{{ hostvars[inventory_hostname]['instance_type'] | replace('.', '_') }}"
+      timestamp: "{{ hostvars['localhost']['timestamp'] }}"
+
+- name: General setup
+  tags: [prepare]
+  hosts: all
+  connection: ssh
+  become: true
+  tasks:
+  - name: Update and upgrade apt packages
+    apt:
+      update_cache: yes
+      upgrade: yes
+      cache_valid_time: 86400
+  - name: Install required packages
+    apt:
+      name:
+      - fio
+      - sysstat
+      state: present
+
+- name: Reboot
+  tags: [never]
+  hosts: all
+  connection: ssh
+  become: true
+  tasks:
+  - reboot:
+
+- name: Run benchmark
+  tags: [run]
+  hosts: all
+  connection: ssh
+  become: true
+  tasks:
+  - name: Prepare result directory
+    file:
+      path: "{{ work_dir }}/result/{{ timestamp }}/"
+      state: directory
+      mode: 0755
+  - set_fact:
+      result_dir: "{{ work_dir }}/result/{{ timestamp }}"
+  - name: Set up fio config
+    template:
+      src: fio.cfg.tpl
+      dest: "{{ work_dir }}/fio.cfg"
+      mode: 0644
+  - name: Disk benchmarks
+    shell: |
+      fio fio.cfg --output-format=json+ --output={{ result_dir }}/{{ instance_type }}.json
+    args:
+      executable: /bin/bash
+      chdir: "{{ work_dir }}"
+  - shell: find . -name "*.json" -type f -size +0 | sed 's/^\.\///'
+    args:
+      executable: /bin/bash
+      chdir: "{{ result_dir }}"
+    register: result_files
+  - name: Fetch results
+    fetch:
+      src: "{{ result_dir }}/{{ item }}"
+      dest: "./result/{{ timestamp }}/"
+      flat: yes
+    with_items: "{{ result_files.stdout_lines }}"
+
+- name: Summarize results
+  tags: [run]
+  hosts: localhost
+  connection: local
+  tasks:
+  - name: Summarize results
+    shell: |
+      summarize.py ./result/{{ timestamp }}
+    args:
+      executable: /usr/bin/python3
+    register: summarize_result
+  - debug:
+      msg: "{{ summarize_result.stdout_lines }}"
